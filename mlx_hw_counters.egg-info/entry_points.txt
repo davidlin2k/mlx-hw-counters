@@ -1,2 +1,0 @@
-[console_scripts]
-mlx_exporter = mlx_exporter.__main__:main
