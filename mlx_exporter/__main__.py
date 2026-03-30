@@ -7,14 +7,32 @@ import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from mlx_exporter.perf_monitor import PerfMonitor
-from mlx_exporter.mappings.cx5 import COUNTERS, UNITS
+from mlx_exporter.mappings import cx5, cx6
 
 
-def format_prometheus(metrics):
+CHIPS = {
+    "cx5": {
+        "label": "ConnectX-5",
+        "source": "NVIDIA NEO-Host v2.0.10 connectx5_mcra.py",
+        "units": cx5.UNITS,
+        "counters": cx5.COUNTERS,
+        "setup_writes": [],
+    },
+    "cx6": {
+        "label": "ConnectX-6",
+        "source": "NVIDIA NEO-Host connectx6_mcra.py",
+        "units": cx6.UNITS,
+        "counters": cx6.COUNTERS,
+        "setup_writes": cx6.SETUP_WRITES,
+    },
+}
+
+
+def format_prometheus(metrics, chip_label, source_label):
     """Format metrics as Prometheus text exposition."""
     lines = [
-        "# ConnectX-5 NIC-internal performance counters via MCRA",
-        "# Source: NVIDIA NEO-Host v2.0.10 connectx5_mcra.py",
+        f"# {chip_label} NIC-internal performance counters via MCRA",
+        f"# Source: {source_label}",
         ""
     ]
  
@@ -36,7 +54,14 @@ def format_unit_debug(snapshots):
     for snapshot in snapshots:
         lines.append(f"[{snapshot['name']}]")
         en_addr, en_val = snapshot["enable_reg"]
-        lines.append(f"enable  0x{en_addr:06x} = 0x{en_val:08x}")
+        lines.append(
+            f"enable  0x{en_addr:06x} = 0x{en_val:08x} "
+            f"(bit {snapshot['enable_bit']})"
+        )
+
+        if snapshot["start_reg"] is not None:
+            start_addr, start_val = snapshot["start_reg"]
+            lines.append(f"start   0x{start_addr:06x} = 0x{start_val:08x}")
 
         for addr, val in snapshot["selector_regs"]:
             lines.append(f"select  0x{addr:06x} = 0x{val:08x}")
@@ -54,11 +79,16 @@ def format_unit_debug(snapshots):
 
 class MetricsHandler(BaseHTTPRequestHandler):
     monitor = None
+    chip = None
  
     def do_GET(self):
         if self.path == "/metrics":
             metrics = self.monitor.collect()
-            body = format_prometheus(metrics).encode()
+            body = format_prometheus(
+                metrics,
+                self.chip["label"],
+                self.chip["source"],
+            ).encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; version=0.0.4")
             self.send_header("Content-Length", str(len(body)))
@@ -85,7 +115,13 @@ def find_device():
     return None
  
 def main():
-    parser = argparse.ArgumentParser(description="ConnectX-5 MCRA Prometheus exporter")
+    parser = argparse.ArgumentParser(description="Mellanox/NVIDIA MCRA Prometheus exporter")
+    parser.add_argument(
+        "--chip",
+        choices=sorted(CHIPS),
+        default="cx5",
+        help="Counter map to use (default: cx5)",
+    )
     parser.add_argument("-d", "--device", help="MST device path (auto-detect if omitted)")
     parser.add_argument("-o", "--output", default="/var/lib/prometheus/node-exporter/mlx5_perf.prom",
                         help="Textfile output path")
@@ -105,12 +141,25 @@ def main():
     if not device:
         print("ERROR: No MST device found. Run 'mst start' first.", file=sys.stderr)
         sys.exit(1)
+
+    chip = CHIPS[args.chip]
  
-    monitor = PerfMonitor(device, UNITS, COUNTERS)
+    monitor = PerfMonitor(
+        device,
+        chip["units"],
+        chip["counters"],
+        setup_writes=chip["setup_writes"],
+    )
     monitor.setup()
  
-    print(f"mlx5_mcra_exporter: device={device}", file=sys.stderr)
-    print(f"mlx5_mcra_exporter: {len(COUNTERS)} counters across {len(monitor.units)} units", file=sys.stderr)
+    print(
+        f"mlx_mcra_exporter: chip={args.chip} device={device}",
+        file=sys.stderr,
+    )
+    print(
+        f"mlx_mcra_exporter: {len(chip['counters'])} counters across {len(monitor.units)} units",
+        file=sys.stderr,
+    )
 
     if args.dump_unit:
         print(format_unit_debug(monitor.debug_units(set(args.dump_unit))))
@@ -118,13 +167,14 @@ def main():
  
     if args.once:
         metrics = monitor.collect()
-        print(format_prometheus(metrics))
+        print(format_prometheus(metrics, chip["label"], chip["source"]))
         return
  
     if args.http:
         MetricsHandler.monitor = monitor
+        MetricsHandler.chip = chip
         server = HTTPServer(("", args.port), MetricsHandler)
-        print(f"mlx5_mcra_exporter: HTTP server on :{args.port}/metrics", file=sys.stderr)
+        print(f"mlx_mcra_exporter: HTTP server on :{args.port}/metrics", file=sys.stderr)
         signal.signal(signal.SIGTERM, lambda *a: (server.shutdown(), sys.exit(0)))
         try:
             server.serve_forever()
@@ -133,14 +183,14 @@ def main():
         return
  
     # Textfile collector mode
-    print(f"mlx5_mcra_exporter: polling every {args.interval}s -> {args.output}", file=sys.stderr)
+    print(f"mlx_mcra_exporter: polling every {args.interval}s -> {args.output}", file=sys.stderr)
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
  
     signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
     try:
         while True:
             metrics = monitor.collect()
-            body = format_prometheus(metrics)
+            body = format_prometheus(metrics, chip["label"], chip["source"])
             tmp = f"{args.output}.tmp.{os.getpid()}"
             with open(tmp, "w") as f:
                 f.write(body)

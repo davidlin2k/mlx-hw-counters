@@ -6,10 +6,11 @@ from mlx_exporter.perf_counter_unit import PerfCounterUnit
 class PerfMonitor:
     """Manages all performance counter units."""
  
-    def __init__(self, device_path: str, units: list, counters: list):
+    def __init__(self, device_path: str, units: list, counters: list, setup_writes=None):
         self.mf = MCRADevice(device_path)
         self.device_path = device_path
         self.counters = counters
+        self.setup_writes = setup_writes or []
         self.units = {}  # name -> PerfCounterUnit
         self.counter_slots = {}  # counter_idx -> (unit_name, slot_idx)
         self.prev_values = {}  # counter_idx -> value
@@ -20,8 +21,25 @@ class PerfMonitor:
             if unit_name not in units:
                 continue
             if unit_name not in self.units:
+                unit_cfg = units[unit_name]
+                if isinstance(unit_cfg, int):
+                    unit_cfg = {
+                        "en_addr": unit_cfg,
+                        "selector_addr": unit_cfg - 0x20,
+                        "value_addr": unit_cfg + 0x20,
+                        "start_addr": unit_cfg + 0x4,
+                        "enable_bit": 0,
+                        "size": 16,
+                    }
                 self.units[unit_name] = PerfCounterUnit(
-                    unit_name, units[unit_name], self.mf
+                    unit_name,
+                    unit_cfg["en_addr"],
+                    self.mf,
+                    selector_addr=unit_cfg.get("selector_addr"),
+                    value_addr=unit_cfg.get("value_addr"),
+                    start_addr=unit_cfg.get("start_addr"),
+                    enable_bit=unit_cfg.get("enable_bit", 0),
+                    slot_limit=unit_cfg.get("size", 16),
                 )
             unit = self.units[unit_name]
             slot = unit.add_counter(selector, idx)
@@ -29,6 +47,13 @@ class PerfMonitor:
  
     def setup(self):
         """Program all units."""
+        for write in self.setup_writes:
+            self.mf.write_field(
+                addr=write["addr"],
+                start_bit=write["start_bit"],
+                size=write["size"],
+                value=write["value"],
+            )
         for unit in self.units.values():
             unit.program()
         time.sleep(0.1)

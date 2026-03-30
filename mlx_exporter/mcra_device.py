@@ -1,5 +1,6 @@
 import subprocess
 
+
 class MCRADevice:
     """Direct CR-space read/write via mcra command."""
  
@@ -24,6 +25,15 @@ class MCRADevice:
         )
         if result.returncode != 0:
             raise RuntimeError(f"mcra write 0x{addr:06x} failed: {result.stderr}")
+
+    def write_field(self, addr: int, start_bit: int, size: int, value: int):
+        """Read-modify-write a bitfield within a 32-bit register."""
+        if size <= 0:
+            raise ValueError("size must be positive")
+        mask = ((1 << size) - 1) << start_bit
+        current = self.read(addr)
+        new_value = (current & ~mask) | ((value << start_bit) & mask)
+        self.write(addr, new_value)
  
     def read_block(self, base_addr, count):
         """Read consecutive 32-bit registers. Returns list of ints."""
