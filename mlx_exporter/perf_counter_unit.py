@@ -32,7 +32,29 @@ class PerfCounterUnit:
  
         # Enable
         self.mf.write(self.en_addr, 1)
- 
+
+    def debug_snapshot(self):
+        """Return current programming and sampled register values for this unit."""
+        num_words = (self.slot_count + 1) // 2
+        selector_regs = []
+        value_regs = []
+
+        for w in range(num_words):
+            addr = self.sel_addr + w * 4
+            selector_regs.append((addr, self.mf.read(addr)))
+
+        for slot in range(self.slot_count):
+            addr = self.val_addr + slot * 4
+            value_regs.append((addr, self.mf.read(addr)))
+
+        return {
+            "name": self.name,
+            "enable_reg": (self.en_addr, self.mf.read(self.en_addr)),
+            "selector_regs": selector_regs,
+            "value_regs": value_regs,
+            "selectors": list(self.selectors),
+        }
+
     def read_values(self):
         """Read all counter values. Returns list of (counter_idx, value) tuples."""
         results = []

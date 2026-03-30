@@ -2,12 +2,14 @@ import time
 from mlx_exporter.mcra_device import MCRADevice
 from mlx_exporter.perf_counter_unit import PerfCounterUnit
 
+
 class PerfMonitor:
     """Manages all performance counter units."""
  
     def __init__(self, device_path: str, units: list, counters: list):
         self.mf = MCRADevice(device_path)
         self.device_path = device_path
+        self.counters = counters
         self.units = {}  # name -> PerfCounterUnit
         self.counter_slots = {}  # counter_idx -> (unit_name, slot_idx)
         self.prev_values = {}  # counter_idx -> value
@@ -38,6 +40,15 @@ class PerfMonitor:
             for cidx, val in unit.read_values():
                 values[cidx] = val
         return values
+
+    def debug_units(self, unit_names=None):
+        """Return debug snapshots for the requested units."""
+        selected_units = self.units
+        if unit_names:
+            selected_units = {
+                name: unit for name, unit in self.units.items() if name in unit_names
+            }
+        return [unit.debug_snapshot() for unit in selected_units.values()]
  
     def collect(self):
         """Collect metrics. Returns list of (metric_name, labels, value, help, type) tuples."""
@@ -46,7 +57,7 @@ class PerfMonitor:
         dt = now - self.prev_time if self.prev_time else None
  
         metrics = []
-        for idx, (unit_name, selector, metric_name, help_text, mtype) in enumerate(COUNTERS):
+        for idx, (unit_name, selector, metric_name, help_text, mtype) in enumerate(self.counters):
             if idx not in values:
                 continue
             val = values[idx]

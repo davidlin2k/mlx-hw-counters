@@ -28,7 +28,29 @@ def format_prometheus(metrics):
  
     lines.append("")
     return "\n".join(lines)
- 
+
+
+def format_unit_debug(snapshots):
+    """Format unit register snapshots for human inspection."""
+    lines = []
+    for snapshot in snapshots:
+        lines.append(f"[{snapshot['name']}]")
+        en_addr, en_val = snapshot["enable_reg"]
+        lines.append(f"enable  0x{en_addr:06x} = 0x{en_val:08x}")
+
+        for addr, val in snapshot["selector_regs"]:
+            lines.append(f"select  0x{addr:06x} = 0x{val:08x}")
+
+        for slot, (selector, _) in enumerate(snapshot["selectors"]):
+            addr, val = snapshot["value_regs"][slot]
+            lines.append(
+                f"value   slot={slot:02d} selector={selector:03d} "
+                f"addr=0x{addr:06x} value=0x{val:08x} ({val})"
+            )
+
+        lines.append("")
+    return "\n".join(lines)
+
 
 class MetricsHandler(BaseHTTPRequestHandler):
     monitor = None
@@ -71,6 +93,12 @@ def main():
     parser.add_argument("--http", action="store_true", help="Run as HTTP server")
     parser.add_argument("--port", type=int, default=9550, help="HTTP port (default: 9550)")
     parser.add_argument("--once", action="store_true", help="Single collection to stdout")
+    parser.add_argument(
+        "--dump-unit",
+        action="append",
+        metavar="UNIT",
+        help="Dump live selector/value registers for a unit after setup; may be passed multiple times",
+    )
     args = parser.parse_args()
  
     device = args.device or find_device()
@@ -78,11 +106,15 @@ def main():
         print("ERROR: No MST device found. Run 'mst start' first.", file=sys.stderr)
         sys.exit(1)
  
-    monitor = PerfMonitor(device)
+    monitor = PerfMonitor(device, UNITS, COUNTERS)
     monitor.setup()
  
     print(f"mlx5_mcra_exporter: device={device}", file=sys.stderr)
     print(f"mlx5_mcra_exporter: {len(COUNTERS)} counters across {len(monitor.units)} units", file=sys.stderr)
+
+    if args.dump_unit:
+        print(format_unit_debug(monitor.debug_units(set(args.dump_unit))))
+        return
  
     if args.once:
         metrics = monitor.collect()
